@@ -3,6 +3,7 @@
   "scripts": {
     "dev": "webpack-dev-server",
     "start": "concurrently \"npm run server\" \"npm run dev\"",
+    "server-for-todo": "node -r esm ./server-for-todo-example/index.js",
     "server": "node -r esm ./server/index.js",
     "refresh": "rimraf -r node_modules/rxdb/ && npm i ",
     "build": "webpack --env.ENV production",

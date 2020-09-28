@@ -90,8 +90,8 @@ export async function run() {
 
     // The root provides a resolver function for each API endpoint
     const root = {
-        feedTodo: args => {
-            log('## feedTodo()');
+        feedHero: args => {
+            log('## feedHero()');
             log(args);
 
             if (!args.id) {
@@ -126,25 +126,25 @@ export async function run() {
             const limited = filterForMinUpdatedAtAndId.slice(0, args.limit);
             return limited;
         },
-        setTodo: args => {
-            log('## setTodo()');
+        setHero: args => {
+            log('## setHero()');
             log(args);
-            const doc = args.todo;
+            const doc = args.hero;
             documents = documents.filter(d => d.id !== doc.id);
             doc.updatedAt = Math.round(new Date().getTime() / 1000);
             documents.push(doc);
 
             pubsub.publish(
-                'changedTodo',
+                'changedHero',
                 {
-                    changedTodo: doc
+                    changedHero: doc
                 }
             );
-            log('published changedTodo ' + doc.id);
+            log('published changedHero ' + doc.id);
 
             return doc;
         },
-        changedTodo: () => pubsub.asyncIterator('changedTodo')
+        changedHero: () => pubsub.asyncIterator('changedHero')
     };
 
     // server multitab.html - used in the e2e test
