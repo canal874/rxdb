@@ -1,0 +1,8 @@
+{
+  "name": "rxdb-plugin-replication-github",
+  "main": "../../dist/lib/plugins/replication-github/index.js",
+  "jsnext:main": "../../dist/es/plugins/replication-github/index.js",
+  "module": "../../dist/es/plugins/replication-github/index.js",
+  "types": "../../dist/types/plugins/replication-github/index.d.ts",
+  "sideEffects": false
+}
