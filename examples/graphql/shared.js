@@ -3,32 +3,31 @@ export const GRAPHQL_PATH = '/graphql';
 export const GRAPHQL_SUBSCRIPTION_PORT = 10103;
 export const GRAPHQL_SUBSCRIPTION_PATH = '/subscriptions';
 
-export const todoItemsRxSchema = {
-    title: 'todoitems schema',
-    description: 'RxSchema for todo list items',
+export const heroSchema = {
     version: 0,
     type: 'object',
     properties: {
         id: {
             type: 'string',
-            primary: true,
+            primary: true
         },
-        title: {
-            type: 'string',
+        name: {
+            type: 'string'
         },
-        completed: {
-            type: 'boolean',
+        color: {
+            type: 'string'
         },
         updatedAt: {
-            type: 'number',
-        },
+            type: 'number'
+        }
     },
-    required: ['title', 'completed'],
+    indexes: ['name', 'color', 'updatedAt'],
+    required: ['color']
 };
 
 export const graphQLGenerationInput = {
-    todo: {
-        schema: todoItemsRxSchema,
+    hero: {
+        schema: heroSchema,
         feedKeys: [
             'id',
             'updatedAt'

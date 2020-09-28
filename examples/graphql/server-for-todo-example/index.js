@@ -29,7 +29,7 @@ import {
     GRAPHQL_SUBSCRIPTION_PORT,
     GRAPHQL_SUBSCRIPTION_PATH,
     graphQLGenerationInput
-} from '../shared';
+} from '../shared-for-todo';
 
 import {
     graphQLSchemaFromRxSchema
