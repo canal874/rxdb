@@ -202,7 +202,7 @@ export class RxGraphQLReplicationState {
      * @return true if sucessfull
      */
     async runPull(): Promise<boolean> {
-        // console.log('RxGraphQLReplicationState.runPull(): start');
+        console.log('RxGraphQLReplicationState.runPull(): start');
         if (this.isStopped()) return Promise.resolve(false);
 
         const latestDocument = await getLastPullDocument(this.collection, this.endpointHash);
@@ -211,6 +211,8 @@ export class RxGraphQLReplicationState {
 
         let result;
         try {
+            console.debug('-- query');
+            console.dir(pullGraphQL.query);
             result = await this.client.query(pullGraphQL.query, pullGraphQL.variables);
             if (result.errors) {
                 throw new Error(result.errors);
@@ -225,6 +227,8 @@ export class RxGraphQLReplicationState {
         const data = result.data[Object.keys(result.data)[0]];
         const modified: any[] = await Promise.all(data.map(async (doc: any) => await (this.pull as any).modifier(doc)));
 
+        console.debug('-- result');
+        console.dir(modified);
 
         /**
          * Run schema validation in dev-mode
@@ -280,7 +284,7 @@ export class RxGraphQLReplicationState {
      * @return true if successfull, false if not
      */
     async runPush(): Promise<boolean> {
-        // console.log('RxGraphQLReplicationState.runPush(): start');
+        console.log('RxGraphQLReplicationState.runPush(): start');
 
         const changes = await getChangesSinceLastPushSequence(
             this.collection,
