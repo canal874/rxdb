@@ -2,6 +2,8 @@
  * this plugin adds the RxCollection.syncGraphQl()-function to rxdb
  * you can use it to sync collections with remote graphql endpoint
  */
+import { Octokit } from '@octokit/rest';
+import { OctokitResponse, ReposCreateOrUpdateFileContentsResponse201Data, ReposCreateOrUpdateFileContentsResponseData, ReposGetCommitResponseData } from '@octokit/types';
 
 import {
     BehaviorSubject,
@@ -11,7 +13,7 @@ import {
 } from 'rxjs';
 import {
     first,
-    filter
+    filter, throwIfEmpty
 } from 'rxjs/operators';
 import GraphQLClient from 'graphql-client';
 
@@ -47,13 +49,10 @@ import { RxDBLeaderElectionPlugin } from '../leader-election';
 import {
     changeEventfromPouchChange
 } from '../../rx-change-event';
-import {
-    overwritable
-} from '../../overwritable';
 import type {
     RxCollection,
-    GraphQLSyncPullOptions,
-    GraphQLSyncPushOptions,
+    GitHubSyncPullOptions,
+    GitHubSyncPushOptions,
     RxPlugin
 } from '../../types';
 
@@ -66,14 +65,14 @@ addRxPlugin(RxDBLeaderElectionPlugin);
 addRxPlugin(RxDBWatchForChangesPlugin);
 
 
-export class RxGraphQLReplicationState {
+export class RxGitHubReplicationState {
 
     constructor(
         public collection: RxCollection,
         private url: string,
         headers: { [k: string]: string },
-        public pull: GraphQLSyncPullOptions,
-        public push: GraphQLSyncPushOptions,
+        public pull: GitHubSyncPullOptions,
+        public push: GitHubSyncPushOptions,
         public deletedFlag: string,
         public lastPulledRevField: string,
         public live: boolean,
@@ -202,71 +201,96 @@ export class RxGraphQLReplicationState {
      * @return true if sucessfull
      */
     async runPull(): Promise<boolean> {
-        console.log('RxGraphQLReplicationState.runPull(): start');
+        console.log('RxGitHubReplicationState.runPull(): start');
         if (this.isStopped()) return Promise.resolve(false);
 
         const latestDocument = await getLastPullDocument(this.collection, this.endpointHash);
-        const latestDocumentData = latestDocument ? latestDocument : null;
-        const pullGraphQL = await this.pull.queryBuilder(latestDocumentData);
+        const historyOption = latestDocument ? `since: "${latestDocument.modifiedDate}"` : 'since: "1970-01-01T00:00:00Z"';
 
-        let result;
-        try {
-            console.debug('-- query');
-            console.dir(pullGraphQL.query);
-            result = await this.client.query(pullGraphQL.query, pullGraphQL.variables);
-            if (result.errors) {
-                throw new Error(result.errors);
+        const octokit = new Octokit({
+            auth: this.pull.auth
+        });
+        // Get list of documentIDs;
+        const repos: any = await octokit.graphql(`
+        {
+            repository(owner: "${this.pull.owner}", name: "${this.pull.repository}") {
+                defaultBranchRef {
+                    target {
+                        ... on Commit {
+                            history(${historyOption}) {
+                                nodes {
+                                    oid
+                                }
+                            }
+                        }
+                    }
+                }
             }
-        } catch (err) {
-            this._subjects.error.next(err);
-            return false;
         }
+        `
+        ).catch(err => {
+            console.dir(err);
+        });
+        //        console.dir(repos);
 
-        // this assumes that there will be always only one property in the response
-        // is this correct?
-        const data = result.data[Object.keys(result.data)[0]];
-        const modified: any[] = await Promise.all(data.map(async (doc: any) => await (this.pull as any).modifier(doc)));
+        const commitList: { "oid": string }[] = repos.repository.defaultBranchRef.target.history.nodes;
+        console.debug('-- commit list');
+        console.dir(commitList);
 
-        console.debug('-- result');
-        console.dir(modified);
+        // Get list of document
+        const getters: Promise<OctokitResponse<ReposGetCommitResponseData>>[] = [];
 
-        /**
-         * Run schema validation in dev-mode
-         */
-        if (overwritable.isDevMode()) {
-            try {
-                modified.forEach((doc: any) => {
-                    const withoutDeleteFlag = Object.assign({}, doc);
-                    delete withoutDeleteFlag[this.deletedFlag];
-                    delete withoutDeleteFlag._revisions;
-                    this.collection.schema.validate(withoutDeleteFlag);
+        commitList.forEach(commit => {
+            const getter = (sha: string) =>
+                // [getCommit API] https://github.com/octokit/plugin-rest-endpoint-methods.js/blob/5819d6ad02e18a31dbb50aab55d5d9411928ad3f/docs/repos/getCommit.md
+                octokit.repos.getCommit({
+                    owner: this.pull.owner,
+                    repo: this.pull.repository,
+                    ref: sha,
                 });
-            } catch (err) {
-                this._subjects.error.next(err);
-                return false;
-            }
+            getters.push(getter(commit.oid));
+        });
+        const detailedCommits = await Promise.all(getters).catch(err => console.dir(err));
+        if (!detailedCommits) {
+            // Error
+            return true;
         }
+        const docs = detailedCommits.map(commit => {
+            const patch = commit.data.files[0].patch;
+            const res = patch.match(/^\+({.+})$/m);
+            if (res) {
+                return JSON.parse(res[1]);
+            }
+            else {
+                return ''
+            }
+        }).filter(content => content !== '');
+        console.debug('-- docs');
+        console.dir(docs);
 
-        const docIds = modified.map((doc: any) => doc[this.collection.schema.primaryPath]);
+        const docIds = docs.map(doc => doc.id);
+        console.debug('-- docIDs');
+        console.dir(docIds);
+
         const docsWithRevisions = await getDocsWithRevisionsFromPouch(
             this.collection,
             docIds
         );
         await Promise.all(
-            modified
+            docs
                 .map((doc: any) => this.handleDocumentFromRemote(
                     doc, docsWithRevisions as any))
         );
-        modified.map((doc: any) => this._subjects.recieved.next(doc));
+        docs.map((doc: any) => this._subjects.recieved.next(doc));
 
-        if (modified.length === 0) {
+        if (docs.length === 0) {
             if (this.live) {
                 // console.log('no more docs, wait for ping');
             } else {
-                // console.log('RxGraphQLReplicationState._run(): no more docs and not live; complete = true');
+                // console.log('RxGitHubReplicationState._run(): no more docs and not live; complete = true');
             }
         } else {
-            const newLatestDocument = modified[modified.length - 1];
+            const newLatestDocument = docs[docs.length - 1];
             await setLastPullDocument(
                 this.collection,
                 this.endpointHash,
@@ -284,7 +308,7 @@ export class RxGraphQLReplicationState {
      * @return true if successfull, false if not
      */
     async runPush(): Promise<boolean> {
-        console.log('RxGraphQLReplicationState.runPush(): start');
+        console.log('RxGitHubReplicationState.runPush(): start');
 
         const changes = await getChangesSinceLastPushSequence(
             this.collection,
@@ -358,7 +382,7 @@ export class RxGraphQLReplicationState {
             if (this.live) {
                 // console.log('no more docs to push, wait for ping');
             } else {
-                // console.log('RxGraphQLReplicationState._runPull(): no more docs to push and not live; complete = true');
+                // console.log('RxGitHubReplicationState._runPull(): no more docs to push and not live; complete = true');
             }
         } else {
             // we have more docs, re-run
@@ -480,7 +504,7 @@ export function syncGraphQL(
     // ensure the collection is listening to plain-pouchdb writes
     collection.watchForChanges();
 
-    const replicationState = new RxGraphQLReplicationState(
+    const replicationState = new RxGitHubReplicationState(
         collection,
         url,
         headers,
