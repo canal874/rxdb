@@ -1,13 +1,12 @@
-export interface GitHubSyncPullOptions {
+export interface GitHubOptions {
     owner: string,
     repository: string,
     auth: string,
+    message: string,
 }
 
 export interface GitHubSyncPushOptions {
-    owner: string,
-    repository: string,
-    auth: string,
+    batchSize: number,
 }
 
 export type SyncOptionsGitHub = {

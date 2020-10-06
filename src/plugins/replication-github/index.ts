@@ -51,9 +51,8 @@ import {
 } from '../../rx-change-event';
 import type {
     RxCollection,
-    GitHubSyncPullOptions,
     GitHubSyncPushOptions,
-    RxPlugin
+    RxPlugin, GitHubOptions
 } from '../../types';
 
 addRxPlugin(RxDBLeaderElectionPlugin);
@@ -71,7 +70,7 @@ export class RxGitHubReplicationState {
         public collection: RxCollection,
         private url: string,
         headers: { [k: string]: string },
-        public pull: GitHubSyncPullOptions,
+        public github: GitHubOptions,
         public push: GitHubSyncPushOptions,
         public deletedFlag: string,
         public lastPulledRevField: string,
@@ -110,6 +109,11 @@ export class RxGitHubReplicationState {
     public error$: Observable<any> = undefined as any;
     public canceled$: Observable<any> = undefined as any;
     public active$: Observable<boolean> = undefined as any;
+
+    private cacheOfGitHubContentSHA = new Map();
+    private octokit = new Octokit({
+        auth: this.github.auth
+    });
 
 
     /**
@@ -173,25 +177,23 @@ export class RxGitHubReplicationState {
     async _run(retryOnFail = true): Promise<boolean> {
         this._runCount++;
 
-        if (this.push) {
-            const ok = await this.runPush();
-            if (!ok && retryOnFail) {
-                setTimeout(() => this.run(), this.retryTime);
-                /*
-                    Because we assume that conflicts are solved on the server side,
-                    if push failed, do not attempt to pull before push was successful
-                    otherwise we do not know how to merge changes with the local state
-                */
-                return true;
-            }
+        // Do push
+        const pushOk = await this.runPush();
+        if (!pushOk && retryOnFail) {
+            setTimeout(() => this.run(), this.retryTime);
+            /*
+                Because we assume that conflicts are solved on the server side,
+                if push failed, do not attempt to pull before push was successful
+                otherwise we do not know how to merge changes with the local state
+            */
+            return true;
         }
 
-        if (this.pull) {
-            const ok = await this.runPull();
-            if (!ok && retryOnFail) {
-                setTimeout(() => this.run(), this.retryTime);
-                return true;
-            }
+        // Do pull
+        const pullOk = await this.runPull();
+        if (!pullOk && retryOnFail) {
+            setTimeout(() => this.run(), this.retryTime);
+            return true;
         }
 
         return false;
@@ -207,13 +209,10 @@ export class RxGitHubReplicationState {
         const latestDocument = await getLastPullDocument(this.collection, this.endpointHash);
         const historyOption = latestDocument ? `since: "${latestDocument.modifiedDate}"` : 'since: "1970-01-01T00:00:00Z"';
 
-        const octokit = new Octokit({
-            auth: this.pull.auth
-        });
         // Get list of documentIDs;
-        const repos: any = await octokit.graphql(`
+        const repos: any = await this.octokit.graphql(`
         {
-            repository(owner: "${this.pull.owner}", name: "${this.pull.repository}") {
+            repository(owner: "${this.github.owner}", name: "${this.github.repository}") {
                 defaultBranchRef {
                     target {
                         ... on Commit {
@@ -229,7 +228,8 @@ export class RxGitHubReplicationState {
         }
         `
         ).catch(err => {
-            console.dir(err);
+            this._subjects.error.next(err);
+            return false;
         });
         //        console.dir(repos);
 
@@ -243,17 +243,19 @@ export class RxGitHubReplicationState {
         commitList.forEach(commit => {
             const getter = (sha: string) =>
                 // [getCommit API] https://github.com/octokit/plugin-rest-endpoint-methods.js/blob/5819d6ad02e18a31dbb50aab55d5d9411928ad3f/docs/repos/getCommit.md
-                octokit.repos.getCommit({
-                    owner: this.pull.owner,
-                    repo: this.pull.repository,
+                this.octokit.repos.getCommit({
+                    owner: this.github.owner,
+                    repo: this.github.repository,
                     ref: sha,
                 });
             getters.push(getter(commit.oid));
         });
-        const detailedCommits = await Promise.all(getters).catch(err => console.dir(err));
+        const detailedCommits = await Promise.all(getters).catch(err => {
+            this._subjects.error.next(err);
+        });
         if (!detailedCommits) {
             // Error
-            return true;
+            return false;
         }
         const docs = detailedCommits.map(commit => {
             const patch = commit.data.files[0].patch;
@@ -277,9 +279,9 @@ export class RxGitHubReplicationState {
             docIds
         );
         await Promise.all(
-            docs
-                .map((doc: any) => this.handleDocumentFromRemote(
-                    doc, docsWithRevisions as any))
+            // Check deletedFlag
+            docs.map((doc: any) => this.handleDocumentFromRemote(
+                doc, docsWithRevisions as any))
         );
         docs.map((doc: any) => this._subjects.recieved.next(doc));
 
@@ -304,6 +306,106 @@ export class RxGitHubReplicationState {
         return true;
     }
 
+    createOrUpdateGitHub = async (doc: any, isNew: boolean) => {
+        let trialCount = 0;
+
+        const getAndUpdateContent = async () => {
+            trialCount++;
+            console.debug('Trial: ' + trialCount);
+
+            const updatedContent = JSON.stringify(doc);
+            console.debug('[new content] ' + updatedContent);
+
+            // [createOrUpdateFileContents API] https://github.com/octokit/plugin-rest-endpoint-methods.js/blob/5819d6ad02e18a31dbb50aab55d5d9411928ad3f/docs/repos/createOrUpdateFileContents.md
+            const options: { owner: string; repo: string; path: string; sha?: string, message: string; content: string } = {
+                owner: this.github.owner,
+                repo: this.github.repository,
+                path: doc.id,
+                message: this.github.message,
+                content: Buffer.from(updatedContent).toString('base64'),
+            };
+
+            /**
+             * 1. Get SHA of blob by using id
+             */
+            let oldSHA: string;
+            if (!isNew) {
+                oldSHA = this.cacheOfGitHubContentSHA.get(doc.id);
+                if (!oldSHA) {
+                    const oldContentResult = await this.octokit.repos.getContent({
+                        owner: this.github.owner,
+                        repo: this.github.repository,
+                        path: doc.id,
+                    }).catch(err => {
+                        return err;
+                    });
+                    oldSHA = oldContentResult.data.sha;
+
+                    // const oldContent = Buffer.from(oldContentResult.data.content, oldContentResult.data.encoding as any).toString();
+                    // console.debug('[old content] ' + oldContent);        
+                }
+                options['sha'] = oldSHA;
+
+                console.log('old sha: ' + oldSHA);
+            }
+            /**
+             * 2. Create of Update blob and Commit
+             */
+            const result = await this.octokit.repos.createOrUpdateFileContents(
+                options
+            ).catch(err => {
+                return err;
+            });
+
+            console.debug('[update result]');
+            console.dir(result);
+            return result;
+        };
+
+        /**
+         * 3. Retry to get SHA and commit if conflict
+         */
+        let updatedContentResult: OctokitResponse<ReposCreateOrUpdateFileContentsResponseData | ReposCreateOrUpdateFileContentsResponse201Data> | void;
+        let retry = false;
+        do {
+            updatedContentResult = await getAndUpdateContent().catch(err => console.debug(err));
+            retry = false;
+            if (!updatedContentResult) {
+                // Network error?
+            }
+            else if (updatedContentResult.status === 403) {
+                if (updatedContentResult.headers["x-ratelimit-remaining"] && updatedContentResult.headers["x-ratelimit-remaining"] === '0') {
+                    // Reach rate limit
+                }
+                /*            else if(){
+                                // Abuse limit
+                            } */
+                else {
+                    // Other
+
+                }
+            }
+            else if (updatedContentResult.status === 409) {
+                // HttpError: 409 Conflict
+                // Remove cache to get SHA again
+                this.cacheOfGitHubContentSHA.delete(doc.id);
+                retry = true;
+            }
+
+            console.debug('retry: ' + retry);
+        } while (retry);
+
+        /**
+         * 4. Cache SHA of new blob
+         */
+        if (updatedContentResult) {
+            const updatedSHA = updatedContentResult.data.content.sha;
+            console.debug('updated sha: ' + updatedSHA);
+
+            // SHA should be cached to reduce API requests
+            this.cacheOfGitHubContentSHA.set(doc.id, updatedSHA);
+        }
+    };
     /**
      * @return true if successfull, false if not
      */
@@ -326,6 +428,11 @@ export class RxGitHubReplicationState {
             delete doc._attachments;
             delete doc[this.lastPulledRevField];
 
+            let isNew = false;
+            if (doc._rev.startsWith('1-')) {
+                // New doc
+                isNew = true;
+            }
             if (!this.syncRevisions) {
                 delete doc._rev;
             }
@@ -335,7 +442,8 @@ export class RxGitHubReplicationState {
             const seq = change.seq;
             return {
                 doc,
-                seq
+                seq,
+                isNew,
             };
         }));
 
@@ -349,14 +457,16 @@ export class RxGitHubReplicationState {
              */
             for (let i = 0; i < changesWithDocs.length; i++) {
                 const changeWithDoc = changesWithDocs[i];
-                const pushObj = await this.push.queryBuilder(changeWithDoc.doc);
-                const result = await this.client.query(pushObj.query, pushObj.variables);
-                if (result.errors) {
-                    throw new Error(JSON.stringify(result.errors));
-                } else {
-                    this._subjects.send.next(changeWithDoc.doc);
-                    lastSuccessfullChange = changeWithDoc;
+
+                try {
+                    this.createOrUpdateGitHub(changeWithDoc.doc, changeWithDoc.isNew);
+                } catch (err) {
+                    throw new Error(err);
                 }
+
+                this._subjects.send.next(changeWithDoc.doc);
+                lastSuccessfullChange = changeWithDoc;
+
             }
         } catch (err) {
 
