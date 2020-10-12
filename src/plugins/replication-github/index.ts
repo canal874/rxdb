@@ -51,6 +51,7 @@ import {
 } from '../../rx-change-event';
 import type {
     RxCollection,
+    GitHubSyncPullOptions,
     GitHubSyncPushOptions,
     RxPlugin, GitHubOptions
 } from '../../types';
@@ -65,12 +66,13 @@ addRxPlugin(RxDBWatchForChangesPlugin);
 
 
 export class RxGitHubReplicationState {
-
+    private octokit: Octokit;
     constructor(
         public collection: RxCollection,
         private url: string,
         headers: { [k: string]: string },
         public github: GitHubOptions,
+        public pull: GitHubSyncPullOptions,
         public push: GitHubSyncPushOptions,
         public deletedFlag: string,
         public lastPulledRevField: string,
@@ -79,6 +81,10 @@ export class RxGitHubReplicationState {
         public retryTime: number,
         public syncRevisions: boolean
     ) {
+        this.octokit = new Octokit({
+            auth: this.github.auth
+        });
+
         this.client = GraphQLClient({
             url,
             headers
@@ -111,10 +117,6 @@ export class RxGitHubReplicationState {
     public active$: Observable<boolean> = undefined as any;
 
     private cacheOfGitHubContentSHA = new Map();
-    private octokit = new Octokit({
-        auth: this.github.auth
-    });
-
 
     /**
      * things that are more complex to not belong into the constructor
@@ -207,7 +209,13 @@ export class RxGitHubReplicationState {
         if (this.isStopped()) return Promise.resolve(false);
 
         const latestDocument = await getLastPullDocument(this.collection, this.endpointHash);
-        const historyOption = latestDocument ? `since: "${latestDocument.modifiedDate}"` : 'since: "1970-01-01T00:00:00Z"';
+        console.dir(latestDocument);
+        let lastTime = '1970-01-01T00:00:00Z';
+        if(latestDocument && latestDocument[this.pull.modifiedTimePropertyName]){
+            lastTime = this.pull.modifiedTimeToGitTimestamp(latestDocument[this.pull.modifiedTimePropertyName]);
+        }
+        const historyOption = `since: "${lastTime}"`;
+        console.dir(historyOption);
 
         // Get list of documentIDs;
         const repos: any = await this.octokit.graphql(`
@@ -233,7 +241,7 @@ export class RxGitHubReplicationState {
         });
         //        console.dir(repos);
 
-        const commitList: { "oid": string }[] = repos.repository.defaultBranchRef.target.history.nodes;
+        const commitList: { "oid": string }[] = repos.repository.defaultBranchRef ? repos.repository.defaultBranchRef.target.history.nodes : [];
         console.debug('-- commit list');
         console.dir(commitList);
 
@@ -457,7 +465,7 @@ export class RxGitHubReplicationState {
              */
             for (let i = 0; i < changesWithDocs.length; i++) {
                 const changeWithDoc = changesWithDocs[i];
-
+                console.debug('isNew:' + changeWithDoc.isNew);
                 try {
                     this.createOrUpdateGitHub(changeWithDoc.doc, changeWithDoc.isNew);
                 } catch (err) {
@@ -590,6 +598,7 @@ export function syncGraphQL(
         url,
         headers = {},
         waitForLeadership = true,
+        github,
         pull,
         push,
         deletedFlag,
@@ -604,12 +613,8 @@ export function syncGraphQL(
     const collection = this;
 
     // fill in defaults for pull & push
-    if (pull) {
-        if (!pull.modifier) pull.modifier = DEFAULT_MODIFIER;
-    }
-    if (push) {
-        if (!push.modifier) push.modifier = DEFAULT_MODIFIER;
-    }
+    if (!github.modifier) github.modifier = DEFAULT_MODIFIER;
+    if (!push.modifier) push.modifier = DEFAULT_MODIFIER;
 
     // ensure the collection is listening to plain-pouchdb writes
     collection.watchForChanges();
@@ -618,6 +623,7 @@ export function syncGraphQL(
         collection,
         url,
         headers,
+        github,
         pull,
         push,
         deletedFlag,
@@ -640,41 +646,39 @@ export function syncGraphQL(
         // start sync-interval
         if (replicationState.live) {
 
-            if (pull) {
-                (async () => {
-                    while (!replicationState.isStopped()) {
-                        await promiseWait(replicationState.liveInterval);
-                        if (replicationState.isStopped()) return;
-                        await replicationState.run(
-                            // do not retry on liveInterval-runs because they might stack up
-                            // when failing
-                            false
-                        );
-                    }
-                })();
-            }
-
-            if (push) {
-                /**
-                 * we have to use the rxdb changestream
-                 * because the pouchdb.changes stream sometimes
-                 * does not emit events or stucks
-                 */
-                const changeEventsSub = collection.$.subscribe(changeEvent => {
+            (async () => {
+                while (!replicationState.isStopped()) {
+                    await promiseWait(replicationState.liveInterval);
                     if (replicationState.isStopped()) return;
-                    const rev = changeEvent.documentData._rev;
-                    if (
-                        rev &&
-                        !wasRevisionfromPullReplication(
-                            replicationState.endpointHash,
-                            rev
-                        )
-                    ) {
-                        replicationState.run();
-                    }
-                });
-                replicationState._subs.push(changeEventsSub);
-            }
+                    await replicationState.run(
+                        // do not retry on liveInterval-runs because they might stack up
+                        // when failing
+                        false
+                    );
+                }
+            })();
+
+
+            /**
+             * we have to use the rxdb changestream
+             * because the pouchdb.changes stream sometimes
+             * does not emit events or stucks
+             */
+            const changeEventsSub = collection.$.subscribe(changeEvent => {
+                if (replicationState.isStopped()) return;
+                const rev = changeEvent.documentData._rev;
+                if (
+                    rev &&
+                    !wasRevisionfromPullReplication(
+                        replicationState.endpointHash,
+                        rev
+                    )
+                ) {
+                    replicationState.run();
+                }
+            });
+            replicationState._subs.push(changeEventsSub);
+
         }
     });
 
