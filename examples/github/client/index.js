@@ -1,8 +1,8 @@
 import './style.css';
+import config from '../config.json';
 import {
     SubscriptionClient
 } from 'subscriptions-transport-ws';
-
 
 import {
     addRxPlugin,
@@ -96,17 +96,26 @@ async function run() {
         schema: heroSchema
     });
 
+    console.dir(config);
 
     // set up replication
     heroesList.innerHTML = 'Start replication..';
     const replicationState = collection.syncGraphQL({
         url: syncURL,
+        pull: {
+            modifiedTimePropertyName: 'updatedAt',
+            modifiedTimeToGitTimestamp: function(unixTime){
+                return (new Date(unixTime * 1000)).toISOString().replace(/^(.+?T.+?)\..+?$/, '$1') + 'Z';
+            },
+        },
         push: {
             batchSize,
-            queryBuilder: pushQueryBuilder
         },
-        pull: {
-            queryBuilder: pullQueryBuilder
+        github: {
+            owner: config.owner,
+            repository: config.repository,
+            auth: config.auth,
+            message: config.message,
         },
         live: true,
         /**
@@ -126,6 +135,7 @@ async function run() {
 
 
     // setup graphql-subscriptions for pull-trigger
+    /*
     heroesList.innerHTML = 'Create SubscriptionClient..';
     const endpointUrl = 'ws://localhost:' + GRAPHQL_SUBSCRIPTION_PORT + GRAPHQL_SUBSCRIPTION_PATH;
     const wsClient = new SubscriptionClient(endpointUrl, {
@@ -160,7 +170,7 @@ async function run() {
             console.dir(error);
         }
     });
-
+*/
     /**
      * We await the inital replication
      * so that the client never shows outdated data.
@@ -169,9 +179,10 @@ async function run() {
      * will not run through without a connection to the
      * server.
      */
+    /*
     heroesList.innerHTML = 'Await initial replication..';
     await replicationState.awaitInitialReplication();
-
+    */
     // subscribe to heroes list and render the list on change
     heroesList.innerHTML = 'Subscribe to query..';
     collection.find()
@@ -213,7 +224,8 @@ async function run() {
         const obj = {
             id: name,
             name: name,
-            color: color
+            color: color,
+            updatedAt: Math.round(new Date().getTime() / 1000),
         };
         console.log('inserting hero:');
         console.dir(obj);
