@@ -17,11 +17,8 @@ export const heroSchema = {
         color: {
             type: 'string'
         },
-        updatedAt: {
-            type: 'number'
-        }
     },
-    indexes: ['name', 'color', 'updatedAt'],
+    indexes: ['name', 'color'],
     required: ['color']
 };
 
@@ -29,8 +26,7 @@ export const graphQLGenerationInput = {
     hero: {
         schema: heroSchema,
         feedKeys: [
-            'id',
-            'updatedAt'
+            'id'
         ],
         deletedFlag: 'deleted'
     }

@@ -219,7 +219,6 @@ async function run() {
             id: name,
             name: name,
             color: color,
-            updatedAt: Math.round(new Date().getTime() / 1000),
         };
         console.log('inserting hero:');
         console.dir(obj);
