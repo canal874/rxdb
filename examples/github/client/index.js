@@ -1,8 +1,5 @@
 import './style.css';
 import config from '../config.json';
-import {
-    SubscriptionClient
-} from 'subscriptions-transport-ws';
 
 import {
     addRxPlugin,
@@ -12,8 +9,6 @@ import {
 addRxPlugin(require('pouchdb-adapter-idb'));
 import {
     RxDBReplicationGitHubPlugin,
-    pullQueryBuilderFromRxSchema,
-    pushQueryBuilderFromRxSchema
 } from 'rxdb/plugins/replication-github';
 addRxPlugin(RxDBReplicationGitHubPlugin);
 
@@ -33,10 +28,7 @@ addRxPlugin(RxDBQueryBuilderPlugin);
 import {
     GRAPHQL_PORT,
     GRAPHQL_PATH,
-    GRAPHQL_SUBSCRIPTION_PORT,
-    GRAPHQL_SUBSCRIPTION_PATH,
     heroSchema,
-    graphQLGenerationInput
 } from '../shared';
 
 const insertButton = document.querySelector('#insert-button');
@@ -48,16 +40,6 @@ const syncURL = 'http://' + window.location.hostname + ':' + GRAPHQL_PORT + GRAP
 
 
 const batchSize = 5;
-
-const pullQueryBuilder = pullQueryBuilderFromRxSchema(
-    'hero',
-    graphQLGenerationInput.hero,
-    batchSize
-);
-const pushQueryBuilder = pushQueryBuilderFromRxSchema(
-    'hero',
-    graphQLGenerationInput.hero
-);
 
 /**
  * In the e2e-test we get the database-name from the get-parameter
@@ -127,44 +109,6 @@ async function run() {
         console.dir(err);
     });
 
-
-    // setup graphql-subscriptions for pull-trigger
-    /*
-    heroesList.innerHTML = 'Create SubscriptionClient..';
-    const endpointUrl = 'ws://localhost:' + GRAPHQL_SUBSCRIPTION_PORT + GRAPHQL_SUBSCRIPTION_PATH;
-    const wsClient = new SubscriptionClient(endpointUrl, {
-        reconnect: true,
-        timeout: 1000 * 60,
-        onConnect: () => {
-            console.log('SubscriptionClient.onConnect()');
-        },
-        connectionCallback: () => {
-            console.log('SubscriptionClient.connectionCallback:');
-        },
-        reconnectionAttempts: 10000,
-        inactivityTimeout: 10 * 1000,
-        lazy: true
-    });
-    heroesList.innerHTML = 'Subscribe to GraphQL Subscriptions..';
-    const query = `subscription onChangedHero {
-        changedHero {
-            id
-        }
-    }`;
-    const ret = wsClient.request({ query });
-    ret.subscribe({
-        next: async (data) => {
-            console.log('subscription emitted => trigger run()');
-            console.dir(data);
-            await replicationState.run();
-            console.log('run() done');
-        },
-        error(error) {
-            console.log('run() got error:');
-            console.dir(error);
-        }
-    });
-*/
     /**
      * We await the inital replication
      * so that the client never shows outdated data.
@@ -173,10 +117,10 @@ async function run() {
      * will not run through without a connection to the
      * server.
      */
-    /*
+
     heroesList.innerHTML = 'Await initial replication..';
     await replicationState.awaitInitialReplication();
-    */
+
     // subscribe to heroes list and render the list on change
     heroesList.innerHTML = 'Subscribe to query..';
     collection.find()

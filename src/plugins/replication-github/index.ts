@@ -106,8 +106,9 @@ export class RxGitHubReplicationState {
     public _runQueueCount: number = 0;
     public _runCount: number = 0; // used in tests
 
-    public initialReplicationComplete$: Observable<any> = undefined as any;
+    // ..$ are getters created in _prepare() for observables
 
+    public initialReplicationComplete$: Observable<any> = undefined as any; // getter for the BehaviorSubject 'initialReplicationComplete'
     public recieved$: Observable<any> = undefined as any;
     public send$: Observable<any> = undefined as any;
     public error$: Observable<any> = undefined as any;
@@ -243,6 +244,8 @@ export class RxGitHubReplicationState {
 
         // Get commits sorted from new to old
         const commitList: { "oid": string, "authoredDate": string }[] = repos.repository.defaultBranchRef ? repos.repository.defaultBranchRef.target.history.nodes : [];
+        // Reverse it to sort from old to new
+        commitList.reverse();
         console.debug('-- commit list');
         console.dir(commitList);
 
@@ -284,6 +287,7 @@ export class RxGitHubReplicationState {
         console.debug('-- dateAndDocs');
         console.dir(dateAndDocs);
 
+        /*
         const docIds = dateAndDocs.map(dateAndDoc => dateAndDoc.doc.id);
         console.debug('-- docIDs');
         console.dir(docIds);
@@ -292,11 +296,16 @@ export class RxGitHubReplicationState {
             this.collection,
             docIds
         );
+        */
+        /*
         await Promise.all(
-            // Check deletedFlag
-            dateAndDocs.map((dateAndDoc: any) => this.handleDocumentFromRemote(
-                dateAndDoc.doc, docsWithRevisions as any))
+            // Check revisions and deletedFlag
+             dateAndDocs.map((dateAndDoc: any) => this.handleDocumentFromRemote(dateAndDoc.doc))
         );
+        */
+        // for loop is slower than Promise.all, but handle order of remote revisions correctly
+        for(let dateAndDoc of dateAndDocs) await this.handleDocumentFromRemote(dateAndDoc.doc);
+
         dateAndDocs.map((dateAndDoc: any) => this._subjects.recieved.next(dateAndDoc.doc));
 
         if (dateAndDocs.length === 0) {
@@ -306,7 +315,7 @@ export class RxGitHubReplicationState {
                 // console.log('RxGitHubReplicationState._run(): no more docs and not live; complete = true');
             }
         } else {
-            const newLatestDateAndDoc = dateAndDocs[0];
+            const newLatestDateAndDoc = dateAndDocs[dateAndDocs.length-1];
             const newLatestDocument = {
                 ...newLatestDateAndDoc.doc
             };
@@ -521,12 +530,15 @@ export class RxGitHubReplicationState {
         return true;
     }
 
-    async handleDocumentFromRemote(doc: any, docsWithRevisions: any[]) {
+    async handleDocumentFromRemote(doc: any) {
         const deletedValue = doc[this.deletedFlag];
         const toPouch = this.collection._handleToPouch(doc);
-        // console.log('handleDocumentFromRemote(' + toPouch._id + ') start');
+        console.log('handleDocumentFromRemote(' + toPouch._id + ') start. deleledValue is ' + deletedValue);
         toPouch._deleted = deletedValue;
         delete toPouch[this.deletedFlag];
+
+        const docsWithRevisions = await getDocsWithRevisionsFromPouch(
+            this.collection, [toPouch._id]);
 
         if (!this.syncRevisions) {
             const primaryValue = toPouch._id;
@@ -537,6 +549,7 @@ export class RxGitHubReplicationState {
                 toPouch
             );
             if (pouchState) {
+                console.dir(pouchState);
                 const newRevisionHeight = pouchState.revisions.start + 1;
                 const revisionId = newRevision;
                 newRevision = newRevisionHeight + '-' + newRevision;
@@ -546,6 +559,7 @@ export class RxGitHubReplicationState {
                 };
                 toPouch._revisions.ids.unshift(revisionId);
             } else {
+                console.debug('no pouchState');
                 newRevision = '1-' + newRevision;
             }
 
