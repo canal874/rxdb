@@ -121,6 +121,11 @@ async function run() {
     heroesList.innerHTML = 'Await initial replication..';
     await replicationState.awaitInitialReplication();
 
+    // Pull from GitHub periodically
+    setInterval(() => {
+        replicationState.run();
+    }, 1000 * 60 );
+
     // subscribe to heroes list and render the list on change
     heroesList.innerHTML = 'Subscribe to query..';
     collection.find()
