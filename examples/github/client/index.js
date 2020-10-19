@@ -102,12 +102,6 @@ async function run() {
     heroesList.innerHTML = 'Start replication..';
     const replicationState = collection.syncGraphQL({
         url: syncURL,
-        pull: {
-            modifiedTimePropertyName: 'updatedAt',
-            modifiedTimeToGitTimestamp: function(unixTime){
-                return (new Date(unixTime * 1000)).toISOString().replace(/^(.+?T.+?)\..+?$/, '$1') + 'Z';
-            },
-        },
         push: {
             batchSize,
         },

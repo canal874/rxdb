@@ -51,7 +51,6 @@ import {
 } from '../../rx-change-event';
 import type {
     RxCollection,
-    GitHubSyncPullOptions,
     GitHubSyncPushOptions,
     RxPlugin, GitHubOptions
 } from '../../types';
@@ -72,7 +71,6 @@ export class RxGitHubReplicationState {
         private url: string,
         headers: { [k: string]: string },
         public github: GitHubOptions,
-        public pull: GitHubSyncPullOptions,
         public push: GitHubSyncPushOptions,
         public deletedFlag: string,
         public lastPulledRevField: string,
@@ -208,13 +206,14 @@ export class RxGitHubReplicationState {
         console.log('RxGitHubReplicationState.runPull(): start');
         if (this.isStopped()) return Promise.resolve(false);
 
+        const timestampName = 'authoredDate';
+
         const latestDocument = await getLastPullDocument(this.collection, this.endpointHash);
+        console.debug('--lastPullDocument');
         console.dir(latestDocument);
-        let lastTime = '1970-01-01T00:00:00Z';
-        if(latestDocument && latestDocument[this.pull.modifiedTimePropertyName]){
-            lastTime = this.pull.modifiedTimeToGitTimestamp(latestDocument[this.pull.modifiedTimePropertyName]);
-        }
-        const historyOption = `since: "${lastTime}"`;
+        const lastTime = latestDocument && latestDocument[timestampName] ? latestDocument[timestampName] : '1970-01-01T00:00:00Z';
+        const sinceTime = (new Date(Date.parse(lastTime) + 1000)).toISOString().replace(/\..+?Z$/, 'Z');
+        const historyOption = `since: "${sinceTime}"`;
         console.dir(historyOption);
 
         // Get list of documentIDs;
@@ -227,6 +226,7 @@ export class RxGitHubReplicationState {
                             history(${historyOption}) {
                                 nodes {
                                     oid
+                                    ${timestampName}
                                 }
                             }
                         }
@@ -241,10 +241,12 @@ export class RxGitHubReplicationState {
         });
         //        console.dir(repos);
 
-        const commitList: { "oid": string }[] = repos.repository.defaultBranchRef ? repos.repository.defaultBranchRef.target.history.nodes : [];
+        // Get commits sorted from new to old
+        const commitList: { "oid": string, "authoredDate": string }[] = repos.repository.defaultBranchRef ? repos.repository.defaultBranchRef.target.history.nodes : [];
         console.debug('-- commit list');
         console.dir(commitList);
 
+        const shaDateMap = new Map();
         // Get list of document
         const getters: Promise<OctokitResponse<ReposGetCommitResponseData>>[] = [];
 
@@ -265,20 +267,24 @@ export class RxGitHubReplicationState {
             // Error
             return false;
         }
-        const docs = detailedCommits.map(commit => {
+        const dateAndDocs = detailedCommits.map(commit => {
             const patch = commit.data.files[0].patch;
             const res = patch.match(/^\+({.+})$/m);
             if (res) {
-                return JSON.parse(res[1]);
+                const obj: any = {
+                    doc: JSON.parse(res[1])
+                };
+                obj[timestampName] = commit.data.commit.author.date;
+                return obj;
             }
             else {
                 return ''
             }
-        }).filter(content => content !== '');
-        console.debug('-- docs');
-        console.dir(docs);
+        }).filter(dateAndDoc => dateAndDoc !== '');
+        console.debug('-- dateAndDocs');
+        console.dir(dateAndDocs);
 
-        const docIds = docs.map(doc => doc.id);
+        const docIds = dateAndDocs.map(dateAndDoc => dateAndDoc.doc.id);
         console.debug('-- docIDs');
         console.dir(docIds);
 
@@ -288,19 +294,24 @@ export class RxGitHubReplicationState {
         );
         await Promise.all(
             // Check deletedFlag
-            docs.map((doc: any) => this.handleDocumentFromRemote(
-                doc, docsWithRevisions as any))
+            dateAndDocs.map((dateAndDoc: any) => this.handleDocumentFromRemote(
+                dateAndDoc.doc, docsWithRevisions as any))
         );
-        docs.map((doc: any) => this._subjects.recieved.next(doc));
+        dateAndDocs.map((dateAndDoc: any) => this._subjects.recieved.next(dateAndDoc.doc));
 
-        if (docs.length === 0) {
+        if (dateAndDocs.length === 0) {
             if (this.live) {
                 // console.log('no more docs, wait for ping');
             } else {
                 // console.log('RxGitHubReplicationState._run(): no more docs and not live; complete = true');
             }
         } else {
-            const newLatestDocument = docs[docs.length - 1];
+            const newLatestDateAndDoc = dateAndDocs[0];
+            const newLatestDocument = {
+                ...newLatestDateAndDoc.doc
+            };
+            newLatestDocument[timestampName] = newLatestDateAndDoc[timestampName];
+
             await setLastPullDocument(
                 this.collection,
                 this.endpointHash,
@@ -624,7 +635,6 @@ export function syncGraphQL(
         url,
         headers,
         github,
-        pull,
         push,
         deletedFlag,
         lastPulledRevField,

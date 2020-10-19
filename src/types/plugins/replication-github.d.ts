@@ -5,11 +5,6 @@ export interface GitHubOptions {
     message: string,
 }
 
-export interface GitHubSyncPullOptions {
-    modifiedTimePropertyName: string,
-    modifiedTimeToGitTimestamp: Function
-}
-
 export interface GitHubSyncPushOptions {
     batchSize: number,
 }
@@ -19,7 +14,6 @@ export type SyncOptionsGitHub = {
     headers?: { [k: string]: string }; // send with all requests to the endpoint
     waitForLeadership?: boolean; // default=true
     github: GitHubOptions;
-    pull: GitHubSyncPullOptions;
     push: GitHubSyncPushOptions;
     deletedFlag: string;
     live?: boolean; // default=false

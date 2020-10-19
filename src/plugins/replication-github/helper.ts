@@ -5,7 +5,7 @@ import type {
     RxCollection
 } from '../../types';
 
-export const PLUGIN_IDENT = 'rxdbreplicationgraphql';
+export const PLUGIN_IDENT = 'rxdbreplicationgithub';
 
 // does nothing
 export const DEFAULT_MODIFIER = (d: any) => Promise.resolve(d);
