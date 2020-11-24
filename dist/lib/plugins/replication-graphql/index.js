@@ -34,6 +34,7 @@ var _helper = require("./helper");
 Object.keys(_helper).forEach(function (key) {
   if (key === "default" || key === "__esModule") return;
   if (Object.prototype.hasOwnProperty.call(_exportNames, key)) return;
+  if (key in exports && exports[key] === _helper[key]) return;
   Object.defineProperty(exports, key, {
     enumerable: true,
     get: function get() {
@@ -47,6 +48,7 @@ var _crawlingCheckpoint = require("./crawling-checkpoint");
 Object.keys(_crawlingCheckpoint).forEach(function (key) {
   if (key === "default" || key === "__esModule") return;
   if (Object.prototype.hasOwnProperty.call(_exportNames, key)) return;
+  if (key in exports && exports[key] === _crawlingCheckpoint[key]) return;
   Object.defineProperty(exports, key, {
     enumerable: true,
     get: function get() {
@@ -68,6 +70,7 @@ var _graphqlSchemaFromRxSchema = require("./graphql-schema-from-rx-schema");
 Object.keys(_graphqlSchemaFromRxSchema).forEach(function (key) {
   if (key === "default" || key === "__esModule") return;
   if (Object.prototype.hasOwnProperty.call(_exportNames, key)) return;
+  if (key in exports && exports[key] === _graphqlSchemaFromRxSchema[key]) return;
   Object.defineProperty(exports, key, {
     enumerable: true,
     get: function get() {
@@ -81,6 +84,7 @@ var _queryBuilderFromRxSchema = require("./query-builder-from-rx-schema");
 Object.keys(_queryBuilderFromRxSchema).forEach(function (key) {
   if (key === "default" || key === "__esModule") return;
   if (Object.prototype.hasOwnProperty.call(_exportNames, key)) return;
+  if (key in exports && exports[key] === _queryBuilderFromRxSchema[key]) return;
   Object.defineProperty(exports, key, {
     enumerable: true,
     get: function get() {
