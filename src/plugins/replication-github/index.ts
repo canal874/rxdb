@@ -260,7 +260,7 @@ export class RxGitHubReplicationState {
                     owner: this.github.owner,
                     repo: this.github.repository,
                     ref: sha,
-                });
+                }) as unknown as Promise<OctokitResponse<ReposGetCommitResponseData>>;
             getters.push(getter(commit.oid));
         });
         const detailedCommits = await Promise.all(getters).catch(err => {
